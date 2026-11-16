@@ -11,6 +11,8 @@ export interface InvestigateOpts {
   history: { role: 'user' | 'assistant'; content: string }[]
   imageBase64?: string | null
   signal: AbortSignal
+  /** Saves a note to the shared Notes list and returns its title. */
+  saveNote: (title: string, body: string) => string
   onEvent: (ev: Record<string, unknown>) => void
 }
 
@@ -20,6 +22,7 @@ Rules:
 - Investigate by calling tools (list_dir, read_file, grep) before answering substantive questions.
 - Ground every claim about the code in files you have read. Mark anything you cannot verify as "unverified" or "inferred".
 - Never claim a test or program ran — you cannot execute code.
+- You cannot edit files. You can save notes: when the user asks to write something down, save it, or add it to notes, call write_note with a short title and a tight markdown body, then confirm in one sentence. Earlier answers in this conversation are fair game to save.
 - When you cite code, include the workspace-relative path and line range you actually read.
 
 Writing style — follow strictly:
@@ -42,13 +45,17 @@ function buildSystem(opts: InvestigateOpts): string {
   return `${BASE_SYSTEM}\n\n${verbosityHint}\nWorkspace root: ${opts.workspace.rootPath}${persona}`
 }
 
-async function runTool(ws: WorkspaceGuard, name: string, input: any): Promise<string> {
+async function runTool(ws: WorkspaceGuard, name: string, input: any, saveNote: InvestigateOpts['saveNote']): Promise<string> {
   if (name === 'list_dir') return await listDir(ws, input?.path ?? '.')
   if (name === 'read_file') {
     const r = await readFile(ws, input.path, input.start_line, input.end_line)
     return `path=${input.path} hash=${r.hash} lines=${r.totalLines}\n---\n${r.text}`
   }
   if (name === 'grep') return await grep(ws, input.pattern, { maxResults: input.max_results })
+  if (name === 'write_note') {
+    const title = saveNote(String(input?.title ?? 'Note'), String(input?.body ?? ''))
+    return `Note "${title}" saved to the Notes panel.`
+  }
   throw new Error(`Unknown tool: ${name}`)
 }
 
@@ -117,7 +124,7 @@ export async function investigate(opts: InvestigateOpts): Promise<void> {
       }
       opts.onEvent({ type: 'tool_start', id: tu.id, name: tu.name, input: tu.input })
       try {
-        const out = await runTool(opts.workspace, tu.name, tu.input)
+        const out = await runTool(opts.workspace, tu.name, tu.input, opts.saveNote)
         opts.onEvent({ type: 'tool_done', id: tu.id, preview: out.slice(0, 240) })
         toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: out })
       } catch (err: any) {

@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Settings, SourceMeta } from '../shared/types'
+import type { Note, Settings, SourceMeta } from '../shared/types'
 
 const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke('settings:set', patch),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:pick'),
   showMain: (): Promise<void> => ipcRenderer.invoke('window:showMain'),
+  quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMax: () => ipcRenderer.invoke('window:toggleMax'),
@@ -20,7 +21,7 @@ const api = {
       ipcRenderer.invoke('capture:sources')
   },
   investigate: {
-    start: (payload: { id: string; question: string; history: any[]; imageBase64?: string | null }) =>
+    start: (payload: { id: string; question: string; history: any[]; imageBase64?: string | null; useScreen?: boolean }) =>
       ipcRenderer.invoke('investigate:start', payload),
     cancel: (id: string) => ipcRenderer.invoke('investigate:cancel', id),
     onEvent: (id: string, cb: (ev: any) => void) => {
@@ -28,6 +29,30 @@ const api = {
       const handler = (_e: unknown, ev: any) => cb(ev)
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
+    }
+  },
+  notes: {
+    list: (): Promise<Note[]> => ipcRenderer.invoke('notes:list'),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke('notes:delete', id),
+    onChanged: (cb: (notes: Note[]) => void) => {
+      const handler = (_e: unknown, notes: Note[]) => cb(notes)
+      ipcRenderer.on('notes:changed', handler)
+      return () => ipcRenderer.removeListener('notes:changed', handler)
+    }
+  },
+  textbar: {
+    hide: (): Promise<void> => ipcRenderer.invoke('textbar:hide'),
+    resize: (height: number): Promise<void> => ipcRenderer.invoke('textbar:resize', height),
+    pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke('textbar:pickWorkspace'),
+    onShown: (cb: (info: { hasScreen: boolean }) => void) => {
+      const handler = (_e: unknown, info: { hasScreen: boolean }) => cb(info)
+      ipcRenderer.on('textbar:shown', handler)
+      return () => ipcRenderer.removeListener('textbar:shown', handler)
+    },
+    onHideRequest: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('textbar:hide-request', handler)
+      return () => ipcRenderer.removeListener('textbar:hide-request', handler)
     }
   },
   live: {

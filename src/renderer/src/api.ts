@@ -1,10 +1,11 @@
-import type { Settings, SourceMeta } from '../../shared/types'
+import type { Note, Settings, SourceMeta } from '../../shared/types'
 
 type API = {
   getSettings: () => Promise<Settings>
   setSettings: (patch: Partial<Settings>) => Promise<Settings>
   pickWorkspace: () => Promise<string | null>
   showMain: () => Promise<void>
+  quit: () => Promise<void>
   window: { minimize: () => Promise<void>; toggleMax: () => Promise<void>; close: () => Promise<void> }
   openPath: (p: string) => Promise<string>
   openInEditor: (path: string, line?: number) => Promise<{ ok: boolean; copied: boolean; error?: string }>
@@ -13,9 +14,21 @@ type API = {
     listSources: () => Promise<{ id: string; name: string; thumbnailDataUrl: string; isScreen: boolean }[]>
   }
   investigate: {
-    start: (p: { id: string; question: string; history: any[]; imageBase64?: string | null }) => Promise<{ ok: boolean; error?: string }>
+    start: (p: { id: string; question: string; history: any[]; imageBase64?: string | null; useScreen?: boolean }) => Promise<{ ok: boolean; error?: string }>
     cancel: (id: string) => Promise<boolean>
     onEvent: (id: string, cb: (ev: any) => void) => () => void
+  }
+  notes: {
+    list: () => Promise<Note[]>
+    remove: (id: string) => Promise<void>
+    onChanged: (cb: (notes: Note[]) => void) => () => void
+  }
+  textbar: {
+    hide: () => Promise<void>
+    resize: (height: number) => Promise<void>
+    pickWorkspace: () => Promise<string | null>
+    onShown: (cb: (info: { hasScreen: boolean }) => void) => () => void
+    onHideRequest: (cb: () => void) => () => void
   }
   live: {
     createSession: (offerSdp: string) => Promise<{ ok: boolean; answerSdp?: string; tools?: any[]; instructions?: string; error?: string }>
