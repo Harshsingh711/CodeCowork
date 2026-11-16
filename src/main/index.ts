@@ -5,7 +5,8 @@ import Store from 'electron-store'
 import { WorkspaceGuard } from './tools'
 import { investigate } from './investigator'
 import { createLiveSession, LIVE_TOOL_SCHEMAS, runLiveTool } from './live'
-import type { Settings } from '../shared/types'
+import { randomUUID } from 'crypto'
+import type { Note, Settings } from '../shared/types'
 
 const DEFAULT_SETTINGS: Settings = {
   apiKey: process.env.ANTHROPIC_API_KEY ?? '',
@@ -16,13 +17,46 @@ const DEFAULT_SETTINGS: Settings = {
   workspacePath: null,
   personality: 'Warm, concise, and precise. Flag uncertainty plainly.',
   verbosity: 'balanced',
-  voiceOut: true
+  voiceOut: true,
+  shareScreen: true
 }
 
 const store = new Store<Settings>({ defaults: DEFAULT_SETTINGS })
 
+// Notes are saved on disk and shared by every window, whether they came from voice or the text bar.
+const notesStore = new Store<{ notes: Note[] }>({ name: 'notes', defaults: { notes: [] } })
+const MAX_NOTES = 200
+
+function broadcastNotes() {
+  const notes = notesStore.get('notes')
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('notes:changed', notes)
+  }
+}
+
+function addNote(title: string, body: string): Note {
+  const note: Note = {
+    id: randomUUID(),
+    title: (title || 'Note').toString().slice(0, 120),
+    body: (body ?? '').toString(),
+    createdAt: Date.now()
+  }
+  notesStore.set('notes', [note, ...notesStore.get('notes')].slice(0, MAX_NOTES))
+  broadcastNotes()
+  return note
+}
+
+ipcMain.handle('notes:list', () => notesStore.get('notes'))
+ipcMain.handle('notes:delete', (_e, id: string) => {
+  notesStore.set('notes', notesStore.get('notes').filter(n => n.id !== id))
+  broadcastNotes()
+})
+
 let mainWindow: BrowserWindow | null = null
 let controlWindow: BrowserWindow | null = null
+let textBarWindow: BrowserWindow | null = null
+// Screenshot taken just before the text bar opened (so the bar itself is not in it). Raw base64 JPEG.
+let textBarShot: string | null = null
 const activeInvestigations = new Map<string, AbortController>()
 
 function createMainWindow() {
@@ -42,6 +76,7 @@ function createMainWindow() {
     }
   })
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('closed', () => { mainWindow = null })
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
     if (level >= 2) console.log(`[renderer ${level === 3 ? 'error' : 'warn'}] ${message} (${sourceId}:${line})`)
   })
@@ -81,6 +116,148 @@ function createControlWindow() {
   }
 }
 
+// ── Text bar ──────────────────────────────────────────────────────────────
+// A Spotlight-style prompt that floats over whatever the user is doing. It is created once and
+// shown/hidden, so the conversation survives between uses.
+const TEXTBAR_WIDTH = 760
+const TEXTBAR_MIN_HEIGHT = 96
+const TEXTBAR_MAX_HEIGHT = 660
+let textBarHideTimer: NodeJS.Timeout | null = null
+// The bar's left and bottom edges stay put; answers grow upward from there.
+let textBarAnchor: { x: number; bottom: number } | null = null
+// Our own setBounds calls also fire move events; only moves outside this window of time are the user's.
+let textBarSelfMoveAt = 0
+// True while the folder picker is open, so losing focus to it does not dismiss the bar.
+let textBarPicking = false
+// Last content height the page reported; it reports once before the bar has ever been shown.
+let textBarHeight = TEXTBAR_MIN_HEIGHT
+
+/** Place the window so its bottom edge sits on the anchor, without leaving the screen. */
+function placeTextBar(height: number) {
+  const win = textBarWindow
+  if (!win || win.isDestroyed() || !textBarAnchor) return
+  const area = screen.getDisplayNearestPoint({ x: textBarAnchor.x + TEXTBAR_WIDTH / 2, y: textBarAnchor.bottom }).workArea
+  const h = Math.max(TEXTBAR_MIN_HEIGHT, Math.min(TEXTBAR_MAX_HEIGHT, area.height, Math.ceil(height)))
+  // If there is not enough room above, the bar slides down just enough to fit.
+  const y = Math.max(area.y, Math.min(textBarAnchor.bottom, area.y + area.height) - h)
+  const next = { x: Math.round(textBarAnchor.x), y: Math.round(y), width: TEXTBAR_WIDTH, height: h }
+  const b = win.getBounds()
+  if (b.x === next.x && b.y === next.y && b.height === next.height) return
+  textBarSelfMoveAt = Date.now()
+  win.setBounds(next)
+}
+
+function createTextBarWindow() {
+  textBarWindow = new BrowserWindow({
+    width: TEXTBAR_WIDTH,
+    height: TEXTBAR_MIN_HEIGHT,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    fullscreenable: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true
+    }
+  })
+  textBarWindow.setAlwaysOnTop(true, 'floating')
+  // Clicking away dismisses it, like any launcher. The page plays its exit animation, then hides.
+  textBarWindow.on('blur', () => { if (!textBarPicking) requestTextBarHide() })
+  textBarWindow.on('closed', () => { textBarWindow = null })
+  // The user dragged it: remember the new spot for next time.
+  textBarWindow.on('moved', () => {
+    const win = textBarWindow
+    if (!win || Date.now() - textBarSelfMoveAt < 250) return
+    const b = win.getBounds()
+    textBarAnchor = { x: b.x, bottom: b.y + b.height }
+    store.set('textBarPos', textBarAnchor)
+  })
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    textBarWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/textbar.html`)
+  } else {
+    textBarWindow.loadFile(join(__dirname, '../renderer/textbar.html'))
+  }
+}
+
+function requestTextBarHide() {
+  const win = textBarWindow
+  if (!win || !win.isVisible()) return
+  win.webContents.send('textbar:hide-request')
+  // If the page never answers, hide anyway.
+  if (textBarHideTimer) clearTimeout(textBarHideTimer)
+  textBarHideTimer = setTimeout(() => { if (!win.isDestroyed()) win.hide() }, 400)
+}
+
+async function toggleTextBar() {
+  if (!textBarWindow) createTextBarWindow()
+  const win = textBarWindow!
+  if (win.isVisible()) { requestTextBarHide(); return }
+  if (textBarHideTimer) { clearTimeout(textBarHideTimer); textBarHideTimer = null }
+
+  const s = { ...DEFAULT_SETTINGS, ...store.store } as Settings
+  // Take the screenshot before the bar appears, so the bar is not in the picture.
+  textBarShot = null
+  if (s.shareScreen) {
+    const shot = await captureDisplay(1_400_000)
+    if (shot.ok && shot.dataUrl) textBarShot = shot.dataUrl.slice(shot.dataUrl.indexOf(',') + 1)
+  }
+
+  // Where the user left it, if that spot is still on a screen; otherwise centred, a little below
+  // the middle of the display they are working on, leaving room for answers above.
+  const saved = s.textBarPos
+  const onScreen = saved && screen.getAllDisplays().some(d =>
+    saved.x + TEXTBAR_WIDTH / 2 >= d.workArea.x && saved.x + TEXTBAR_WIDTH / 2 <= d.workArea.x + d.workArea.width &&
+    saved.bottom > d.workArea.y + TEXTBAR_MIN_HEIGHT && saved.bottom <= d.workArea.y + d.workArea.height)
+  if (saved && onScreen) {
+    textBarAnchor = { x: saved.x, bottom: saved.bottom }
+  } else {
+    const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+    textBarAnchor = {
+      x: Math.round(area.x + (area.width - TEXTBAR_WIDTH) / 2),
+      bottom: Math.round(area.y + area.height * 0.66)
+    }
+  }
+  placeTextBar(textBarHeight)
+  win.show()
+  win.focus()
+  win.webContents.send('textbar:shown', { hasScreen: !!textBarShot })
+}
+
+// Choose a different workspace folder without leaving the text bar.
+ipcMain.handle('textbar:pickWorkspace', async () => {
+  const win = textBarWindow
+  if (!win || win.isDestroyed()) return null
+  textBarPicking = true
+  try {
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose a workspace folder',
+      defaultPath: (store.store as Settings).workspacePath ?? undefined,
+      properties: ['openDirectory']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    store.set('workspacePath', result.filePaths[0])
+    return result.filePaths[0]
+  } finally {
+    textBarPicking = false
+    if (!win.isDestroyed() && win.isVisible()) win.focus()
+  }
+})
+
+ipcMain.handle('textbar:hide', () => {
+  if (textBarHideTimer) { clearTimeout(textBarHideTimer); textBarHideTimer = null }
+  textBarWindow?.hide()
+})
+// The page reports its content height; the window follows so nothing outside the bar blocks clicks.
+ipcMain.handle('textbar:resize', (_e, height: number) => {
+  textBarHeight = height
+  placeTextBar(height)
+})
+
 app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, cb) => {
     const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] })
@@ -90,11 +267,10 @@ app.whenReady().then(() => {
   createMainWindow()
   createControlWindow()
 
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
-    if (!mainWindow) return
-    if (mainWindow.isVisible() && mainWindow.isFocused()) mainWindow.hide()
-    else { mainWindow.show(); mainWindow.focus() }
-  })
+  createTextBarWindow()
+
+  // The shortcut opens the text bar. The main window opens from the control bar's Open button.
+  globalShortcut.register('CommandOrControl+Shift+Space', () => { void toggleTextBar() })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
@@ -131,16 +307,23 @@ ipcMain.handle('window:toggleMax', () => {
   else mainWindow.maximize()
 })
 ipcMain.handle('window:close', () => mainWindow?.close())
-ipcMain.handle('window:showMain', () => { mainWindow?.show(); mainWindow?.focus() })
+ipcMain.handle('window:showMain', () => {
+  // The main window may have been closed from its titlebar; the control bar can bring it back.
+  if (!mainWindow) createMainWindow()
+  else { mainWindow.show(); mainWindow.focus() }
+})
+// Quit for good: closes both windows and ends the process (used by the control bar's close button).
+ipcMain.handle('app:quit', () => app.quit())
 
 ipcMain.handle('shell:openPath', (_e, p: string) => shell.openPath(p))
 
 // Open a workspace file in VS Code at a line, via its registered vscode:// URL handler
 // (no shell, no PATH lookup). Falls back to copying `path:line` when VS Code isn't installed.
 ipcMain.handle('editor:open', async (_e, { path, line }: { path: string; line?: number }) => {
-  if (!currentWorkspace) return { ok: false, copied: false, error: 'No workspace' }
+  const ws = activeWorkspace()
+  if (!ws) return { ok: false, copied: false, error: 'No workspace' }
   let full: string
-  try { full = currentWorkspace.resolveSafe(path) } catch (err: any) {
+  try { full = ws.resolveSafe(path) } catch (err: any) {
     return { ok: false, copied: false, error: err?.message ?? String(err) }
   }
   const lineNo = Math.max(1, Math.floor(line ?? 1))
@@ -152,7 +335,7 @@ ipcMain.handle('editor:open', async (_e, { path, line }: { path: string; line?: 
       return { ok: true, copied: false }
     } catch { /* fall through to copy */ }
   }
-  clipboard.writeText(`${currentWorkspace.rel(full)}:${lineNo}`)
+  clipboard.writeText(`${ws.rel(full)}:${lineNo}`)
   return { ok: false, copied: true, error: 'VS Code not found' }
 })
 
@@ -172,7 +355,7 @@ ipcMain.handle('capture:sources', async () => {
   }))
 })
 
-ipcMain.handle('investigate:start', async (event, payload: { id: string; question: string; history: any[]; imageBase64?: string | null }) => {
+ipcMain.handle('investigate:start', async (event, payload: { id: string; question: string; history: any[]; imageBase64?: string | null; useScreen?: boolean }) => {
   const s = store.store
   if (!s.apiKey) return { ok: false, error: 'Set your Anthropic API key in settings first.' }
   if (!s.workspacePath) return { ok: false, error: 'Connect a workspace folder first.' }
@@ -190,8 +373,9 @@ ipcMain.handle('investigate:start', async (event, payload: { id: string; questio
     personality: s.personality,
     verbosity: s.verbosity,
     history: payload.history,
-    imageBase64: payload.imageBase64 ?? null,
+    imageBase64: payload.imageBase64 ?? (payload.useScreen ? textBarShot : null),
     signal: ac.signal,
+    saveNote: (title, body) => addNote(title, body).title,
     onEvent: send
   }).catch((err: any) => {
     send({ type: 'error', error: err?.message ?? String(err) })
@@ -222,6 +406,13 @@ Personality: ${s.personality || 'warm, concise, precise'}.`
 }
 
 let currentWorkspace: WorkspaceGuard | null = null
+
+/** The workspace of the live voice session, or the one saved in settings when no session has started. */
+function activeWorkspace(): WorkspaceGuard | null {
+  if (currentWorkspace) return currentWorkspace
+  const p = (store.store as Settings).workspacePath
+  return p ? new WorkspaceGuard(p) : null
+}
 
 ipcMain.handle('live:createSession', async (_e, { offerSdp }: { offerSdp: string }) => {
   const s = store.store as Settings
@@ -263,7 +454,9 @@ ipcMain.on('live:log', (_e, entry: unknown) => {
 
 // Screenshot of the display the user is working on (the one under the cursor), as a JPEG data URL
 // small enough to fit in one data-channel message.
-ipcMain.handle('live:captureScreen', async (_e, { maxChars }: { maxChars: number }) => {
+ipcMain.handle('live:captureScreen', (_e, { maxChars }: { maxChars: number }) => captureDisplay(maxChars))
+
+async function captureDisplay(maxChars: number): Promise<{ ok: boolean; dataUrl?: string; width?: number; height?: number; error?: string }> {
   try {
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const px = { width: Math.round(display.size.width * display.scaleFactor), height: Math.round(display.size.height * display.scaleFactor) }
@@ -287,12 +480,14 @@ ipcMain.handle('live:captureScreen', async (_e, { maxChars }: { maxChars: number
   } catch (err: any) {
     return { ok: false, error: err?.message ?? String(err) }
   }
-})
+}
 
 ipcMain.handle('live:runTool', async (_e, { name, args }: { name: string; args: any }) => {
   if (!currentWorkspace) return { ok: false, error: 'No workspace' }
   try {
     const r = await runLiveTool(currentWorkspace, name, args)
+    // Voice notes go into the same saved list; windows hear about it through notes:changed.
+    if (r.note) addNote(r.note.title, r.note.body)
     return { ok: true, output: r.output, note: r.note ?? null, source: r.source ?? null }
   } catch (err: any) {
     return { ok: false, error: err?.message ?? String(err), output: `ERROR: ${err?.message ?? err}` }

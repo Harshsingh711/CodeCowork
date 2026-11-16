@@ -36,6 +36,10 @@ export interface Settings {
   personality: string
   verbosity: 'brief' | 'balanced' | 'detailed'
   voiceOut: boolean
+  /** Text bar: attach a screenshot of the current screen to each question. */
+  shareScreen: boolean
+  /** Text bar: where the user last dragged it (left edge and bottom edge, screen pixels). */
+  textBarPos?: { x: number; bottom: number } | null
 }
 
 export interface Note {

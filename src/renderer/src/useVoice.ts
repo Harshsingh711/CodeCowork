@@ -43,12 +43,20 @@ export function useVoice() {
 
   const clearRaw = () => setRawEvents([])
 
+  // Notes are saved by the main process (from voice and from the text bar); mirror that list here.
+  useEffect(() => {
+    api.notes.list().then(setNotes)
+    return api.notes.onChanged(setNotes)
+  }, [])
+
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   const audioElRef = useRef<HTMLAudioElement | null>(null)
   const dataChannelRef = useRef<RTCDataChannel | null>(null)
   const vuRafRef = useRef<number | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  // Spectrum of Coworker's own voice, for the visualizer. Never routed to the speakers (the <audio> element plays it).
+  const outAnalyserRef = useRef<AnalyserNode | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
 
   // The Live API streams transcript deltas with no item ids and no "done" events,
@@ -131,6 +139,16 @@ export function useVoice() {
           audioElRef.current = el
         }
         audioElRef.current.srcObject = ev.streams[0]
+        try {
+          const ctx = audioCtxRef.current
+          if (ctx && ev.streams[0]) {
+            const an = ctx.createAnalyser()
+            an.fftSize = 512
+            an.smoothingTimeConstant = 0.75
+            ctx.createMediaStreamSource(ev.streams[0]).connect(an)
+            outAnalyserRef.current = an
+          }
+        } catch { /* the visualizer falls back to a synthetic pulse */ }
       }
 
       const dc = pc.createDataChannel('oai-events')
@@ -168,6 +186,7 @@ export function useVoice() {
     micStreamRef.current = null
     dataChannelRef.current = null
     analyserRef.current = null
+    outAnalyserRef.current = null
     audioCtxRef.current = null
     vuRafRef.current = null
     setMicLevel(0)
@@ -256,7 +275,6 @@ export function useVoice() {
         if (r.ok) patchSource(sourceId, { status: 'done', ...(r.source ?? {}) })
         else patchSource(sourceId, { status: 'error', error: r.error ?? 'Lookup failed' })
       }
-      if (r.note) setNotes(prev => [r.note!, ...prev])
       return { callId, output: r.output ?? `ERROR: ${r.error ?? 'tool failed'}` }
     } catch (e: any) {
       return { callId, output: `ERROR: ${e?.message ?? String(e)}` }
@@ -351,7 +369,10 @@ export function useVoice() {
 
   useEffect(() => () => { stop() }, [])
 
-  return { status, micLevel, transcript, notes, toolBanner, error, rawEvents, clearRaw, start, stop, interrupt }
+  // Stable refs, read by the visualizer every frame without re-rendering React.
+  const analysers = { mic: analyserRef, out: outAnalyserRef }
+
+  return { status, micLevel, analysers, transcript, notes, toolBanner, error, rawEvents, clearRaw, start, stop, interrupt }
 }
 
 const LOOKUP_KIND: Record<string, SourceLookup['kind'] | undefined> = {

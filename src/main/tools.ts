@@ -135,5 +135,18 @@ export const TOOL_DEFINITIONS = [
       },
       required: ['pattern']
     }
+  },
+  {
+    name: 'write_note',
+    description:
+      'Save a short, titled note to the Notes panel in Coworker. Use when the user says "write it down", "save that", "add this to notes", "take notes", or wants a summary or list kept. This is the only thing you can write; it does not touch the workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'A short noun-phrase title (<= 60 chars).' },
+        body: { type: 'string', description: 'Markdown body. Keep it tight.' }
+      },
+      required: ['title', 'body']
+    }
   }
 ]

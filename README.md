@@ -30,7 +30,8 @@ It is a Windows-first Electron desktop app. It only ever **reads** your code; it
 - **Every answer shows its sources.** Under each answer, chips like `live.ts L13–60` list the files and line ranges it read. Click one to open VS Code at that line, or right-click to copy `path:lines`. Searches and folder listings fold into a quiet count ("2 searches · 1 folder"), and an answer that read nothing is flagged *"No sources read · general knowledge"*.
 - **Live transcript.** Everything you and Coworker say appears in the Transcript tab as it is spoken.
 - **Notes.** Say "write it down" or "save that" and it writes a short titled note to the Notes tab.
-- **Out of the way.** A small always-on-top control bar, and `Ctrl+Shift+Space` shows or hides the main window from anywhere.
+- **Type instead of talk.** `Ctrl+Shift+Space` pops up a text bar over whatever you are doing. Type a question, and the answer appears under the bar with the same source chips. It can include a screenshot of your screen, taken just before the bar appears.
+- **Out of the way.** A small always-on-top control bar with an **Open** button for the main window and a close button that quits the app.
 - **Your setup, your keys.** You bring your own API keys; they are stored locally on your machine. There is no account and no hosted backend.
 
 ## Getting started
@@ -92,7 +93,7 @@ The **Raw** tab shows every event on the voice connection, which is useful when 
 | OpenAI API key | Required for voice. Stored locally and sent only to OpenAI. |
 | Voice | The spoken voice, for example `gleam`, `alloy`, `echo`, `shimmer`, `ash`, `ballad`, `coral`, `sage`, `verse`. |
 | Voice model | `gpt-live-1`. Reasoning and tool use are delegated to `gpt-6-luna`. |
-| Anthropic API key | Optional. Used only by the text investigation mode, which is built but not yet connected to the UI. |
+| Anthropic API key | Needed for the text bar. Typed questions are answered by the Anthropic investigation loop. |
 | Workspace folder | The only folder Coworker may read. |
 | Verbosity | Brief, balanced or detailed answers. |
 | Personality | A preset (Grounded, Terse senior engineer, Patient teacher, Playful rubber-duck) or your own description. |
@@ -150,14 +151,16 @@ src/
                       voice instructions, screen capture, open-in-editor
     live.ts           Live session creation and the tool schemas the backend model sees
     tools.ts          WorkspaceGuard (path safety), list_dir, read_file, grep
-    investigator.ts   Text investigation loop on the Anthropic API (not yet in the UI)
+    investigator.ts   Text investigation loop on the Anthropic API, used by the text bar
   preload/
     index.ts          contextBridge API exposed to the UI as window.coworker
   renderer/
     index.html        Main window
     control.html      Floating control bar
+    textbar.html      Text bar (Ctrl+Shift+Space)
     src/
       App.tsx         Layout, setup gate, voice vs settings view
+      textbar.tsx     Text bar: prompt, streamed answers, source chips, pop-in animation
       useVoice.ts     WebRTC session, event handling, tool-call loop, transcript state
       api.ts          Typed wrapper around window.coworker
       components/
@@ -165,7 +168,7 @@ src/
         SourceRow.tsx    Source chips under each answer
         VoiceOrb.tsx     Animated status orb
         SettingsPanel.tsx, Sidebar.tsx, Titlebar.tsx, Markdown.tsx, ErrorBoundary.tsx
-        Chat.tsx, Composer.tsx, SourcePicker.tsx   Text-mode UI, not yet wired in
+        Chat.tsx, Composer.tsx, SourcePicker.tsx   Earlier text-mode UI, unused
       index.css       Tailwind layers and component styles
   shared/
     types.ts          Types shared by main, preload and UI
@@ -214,7 +217,7 @@ Development-only warnings; the app runs normally.
 
 ## Limitations and roadmap
 
-- The text investigation mode (Anthropic) is built but not yet reachable from the UI.
+- The text bar keeps its conversation only while the app is running, and the screen toggle takes effect the next time the bar opens.
 - Sources show what was read, not whether the file has changed since; source freshness checks are planned, and the content hash is already recorded.
 - Symbol-aware navigation (LSP) is planned.
 - Web searches happen on OpenAI's side and do not appear as sources.

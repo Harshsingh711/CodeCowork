@@ -24,7 +24,7 @@ Coworker is a screen-aware voice coworker. It sits next to whatever the develope
 
 ## Operating Context
 
-- Runs as a standalone desktop app with a frameless main investigation panel and an always-on-top floating control bar. `Ctrl+Shift+Space` toggles the main window.
+- Runs as a standalone desktop app with a frameless main investigation panel and an always-on-top floating control bar. `Ctrl+Shift+Space` opens a text bar for typed questions; the main window opens from the control bar.
 - The user connects one workspace folder (any repo). Path safety confines tools to that folder.
 - Typical scene: the code is open in another app, the user glances at or speaks to Coworker, and it answers while they keep reading.
 
