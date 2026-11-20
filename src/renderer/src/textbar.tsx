@@ -36,7 +36,7 @@ function TextBar() {
   const [input, setInput] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
   const [shareScreen, setShareScreen] = useState(true)
-  const [hasScreen, setHasScreen] = useState(false)
+  const [pinned, setPinned] = useState(false)
   const [workspace, setWorkspace] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -44,16 +44,18 @@ function TextBar() {
   const [multiline, setMultiline] = useState(false)
   const oneLineWidth = useRef(0)
   const threadRef = useRef<HTMLDivElement>(null)
+  // Follow the answer as it grows only while the user is at the bottom; scrolling up lets go.
+  const followBottom = useRef(true)
   const activeId = useRef<string | null>(null)
   const unsubscribe = useRef<(() => void) | null>(null)
 
   const busy = turns.some(t => t.streaming)
 
   // Appear: main shows the window, then tells us; the next frame starts the pop-in.
-  useEffect(() => api.textbar.onShown(info => {
-    setHasScreen(info.hasScreen)
+  useEffect(() => api.textbar.onShown(() => {
     api.getSettings().then(s => {
       setShareScreen(s.shareScreen !== false)
+      setPinned(!!s.textBarPinned)
       setWorkspace(s.workspacePath ? s.workspacePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null : null)
     })
     requestAnimationFrame(() => {
@@ -81,10 +83,14 @@ function TextBar() {
     return () => ro.disconnect()
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = threadRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && followBottom.current) el.scrollTop = el.scrollHeight
   }, [turns])
+  const onThreadScroll = () => {
+    const el = threadRef.current
+    if (el) followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+  }
 
   // Wrap instead of scrolling sideways, and grow with the text (up to MAX_INPUT_HEIGHT, then scroll).
   useLayoutEffect(() => {
@@ -110,7 +116,8 @@ function TextBar() {
     const question = text.trim()
     if (!question || busy) return
     const id = Math.random().toString(36).slice(2)
-    const usedScreen = shareScreen && hasScreen
+    const usedScreen = shareScreen
+    followBottom.current = true
     // Earlier turns go along as plain text so follow-up questions have context.
     const history = turns.filter(t => t.text && !t.error).flatMap(t => [
       { role: 'user' as const, content: t.question },
@@ -168,6 +175,16 @@ function TextBar() {
 
   const stop = () => { if (activeId.current) api.investigate.cancel(activeId.current) }
 
+  const togglePin = async () => {
+    const next = !pinned
+    setPinned(next)
+    await api.setSettings({ textBarPinned: next })
+    inputRef.current?.focus()
+  }
+  const pinLabel = pinned
+    ? 'Pinned: stays on screen when you click away. Click to unpin.'
+    : 'Keep on screen when you click away'
+
   const toggleScreen = async () => {
     const next = !shareScreen
     setShareScreen(next)
@@ -194,10 +211,9 @@ function TextBar() {
     }
   }
 
-  const screenOn = shareScreen && hasScreen
-  const screenLabel = !shareScreen ? 'Screen sharing is off. Turn on to include your screen with each question.'
-    : hasScreen ? 'Your screen is included with each question. Turn off.'
-    : 'Screen sharing is on and applies the next time you open this bar. Turn off.'
+  const screenOn = shareScreen
+  const screenLabel = shareScreen ? 'Your screen is included with each question. Turn off.'
+    : 'Screen sharing is off. Turn on to include your screen with each question.'
 
   return (
     <div ref={rootRef} className="ask-root" onKeyDown={onKeyDown}>
@@ -215,10 +231,10 @@ function TextBar() {
               ))}
             </ul>
           ) : (
-            <div ref={threadRef} className="ask-thread" aria-live="polite">
+            <div ref={threadRef} className="ask-thread" aria-live="polite" onScroll={onThreadScroll}>
               {turns.map(t => (
                 <article key={t.id} className="ask-turn">
-                  <h2 className="ask-question allow-select">{t.question}</h2>
+                  <p className="ask-question allow-select"><span className="sr-only">You asked: </span>{t.question}</p>
                   {t.text
                     ? <Markdown text={t.text} />
                     : t.streaming && <p className="ask-status"><span className="pulse-dot" aria-hidden="true" />{t.usedScreen ? 'Looking at your screen and the code…' : 'Looking through the code…'}</p>}
@@ -268,6 +284,9 @@ function TextBar() {
             data-live={screenOn || undefined} onClick={toggleScreen}>
             <ScreenIcon off={!shareScreen} />
           </button>
+          <button type="button" className="ask-icon-btn ask-pin" aria-pressed={pinned} aria-label={pinLabel} title={pinLabel} onClick={togglePin}>
+            <PinIcon filled={pinned} />
+          </button>
           <textarea
             ref={inputRef}
             rows={1}
@@ -304,6 +323,15 @@ Click to change folder` : 'Choose a workspace folder'}>
         </form>
       </div>
     </div>
+  )
+}
+
+function PinIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 3h6l-1 6 4 4H6l4-4z"/>
+      <path d="M12 13v8" fill="none"/>
+    </svg>
   )
 }
 

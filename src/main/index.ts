@@ -1,10 +1,11 @@
-import { app, BrowserWindow, ipcMain, dialog, globalShortcut, shell, desktopCapturer, session, clipboard, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, desktopCapturer, session, clipboard, screen } from 'electron'
 import { join } from 'path'
 import { appendFileSync, mkdirSync, writeFileSync } from 'fs'
 import Store from 'electron-store'
 import { WorkspaceGuard } from './tools'
 import { investigate } from './investigator'
 import { createLiveSession, LIVE_TOOL_SCHEMAS, runLiveTool } from './live'
+import { watchCtrlAltShift } from './hotkey'
 import { randomUUID } from 'crypto'
 import type { Note, Settings } from '../shared/types'
 
@@ -55,8 +56,6 @@ ipcMain.handle('notes:delete', (_e, id: string) => {
 let mainWindow: BrowserWindow | null = null
 let controlWindow: BrowserWindow | null = null
 let textBarWindow: BrowserWindow | null = null
-// Screenshot taken just before the text bar opened (so the bar itself is not in it). Raw base64 JPEG.
-let textBarShot: string | null = null
 const activeInvestigations = new Map<string, AbortController>()
 
 function createMainWindow() {
@@ -90,6 +89,11 @@ function createMainWindow() {
   }
 }
 
+// Not 'floating': on Windows that level parks the window just behind the taskbar, and whenever the
+// taskbar is not top-most itself (a fullscreen app is open) the window stops being always-on-top
+// and sinks behind other apps.
+const ON_TOP_LEVEL = 'screen-saver'
+
 function createControlWindow() {
   controlWindow = new BrowserWindow({
     width: 320,
@@ -108,7 +112,7 @@ function createControlWindow() {
       contextIsolation: true
     }
   })
-  controlWindow.setAlwaysOnTop(true, 'floating')
+  controlWindow.setAlwaysOnTop(true, ON_TOP_LEVEL)
   if (process.env['ELECTRON_RENDERER_URL']) {
     controlWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/control.html`)
   } else {
@@ -165,9 +169,10 @@ function createTextBarWindow() {
       contextIsolation: true
     }
   })
-  textBarWindow.setAlwaysOnTop(true, 'floating')
-  // Clicking away dismisses it, like any launcher. The page plays its exit animation, then hides.
-  textBarWindow.on('blur', () => { if (!textBarPicking) requestTextBarHide() })
+  textBarWindow.setAlwaysOnTop(true, ON_TOP_LEVEL)
+  // Clicking away closes it, unless it is pinned or the folder picker has focus.
+  // The page plays its exit animation, then hides.
+  textBarWindow.on('blur', () => { if (!textBarPicking && !store.get('textBarPinned')) requestTextBarHide() })
   textBarWindow.on('closed', () => { textBarWindow = null })
   // The user dragged it: remember the new spot for next time.
   textBarWindow.on('moved', () => {
@@ -193,19 +198,27 @@ function requestTextBarHide() {
   textBarHideTimer = setTimeout(() => { if (!win.isDestroyed()) win.hide() }, 400)
 }
 
-async function toggleTextBar() {
+/** Bring the bar to the front and put the cursor in it, even when another app has the keyboard. */
+function focusTextBar(win: BrowserWindow) {
+  win.setAlwaysOnTop(true, ON_TOP_LEVEL)
+  win.show()
+  win.focus()
+  win.webContents.focus()
+  win.webContents.send('textbar:shown')
+}
+
+function toggleTextBar() {
   if (!textBarWindow) createTextBarWindow()
   const win = textBarWindow!
-  if (win.isVisible()) { requestTextBarHide(); return }
+  if (win.isVisible()) {
+    // Pinned and left in the background: the shortcut returns to it instead of closing it.
+    if (win.isFocused()) requestTextBarHide()
+    else focusTextBar(win)
+    return
+  }
   if (textBarHideTimer) { clearTimeout(textBarHideTimer); textBarHideTimer = null }
 
   const s = { ...DEFAULT_SETTINGS, ...store.store } as Settings
-  // Take the screenshot before the bar appears, so the bar is not in the picture.
-  textBarShot = null
-  if (s.shareScreen) {
-    const shot = await captureDisplay(1_400_000)
-    if (shot.ok && shot.dataUrl) textBarShot = shot.dataUrl.slice(shot.dataUrl.indexOf(',') + 1)
-  }
 
   // Where the user left it, if that spot is still on a screen; otherwise centred, a little below
   // the middle of the display they are working on, leaving room for answers above.
@@ -223,9 +236,27 @@ async function toggleTextBar() {
     }
   }
   placeTextBar(textBarHeight)
-  win.show()
-  win.focus()
-  win.webContents.send('textbar:shown', { hasScreen: !!textBarShot })
+  focusTextBar(win)
+}
+
+/**
+ * Screenshot for a text bar question, taken when the question is sent so it shows what the user
+ * is looking at now (the bar can stay open, pinned, while they move around). The bar is kept out
+ * of the picture by excluding it from capture for a moment. Raw base64 JPEG, or null.
+ */
+async function captureForTextBar(): Promise<string | null> {
+  const win = textBarWindow
+  const hideBar = !!win && !win.isDestroyed() && win.isVisible()
+  if (hideBar) {
+    win.setContentProtection(true)
+    await new Promise(r => setTimeout(r, 60)) // let the compositor drop the bar from the next frame
+  }
+  try {
+    const shot = await captureDisplay(1_400_000)
+    return shot.ok && shot.dataUrl ? shot.dataUrl.slice(shot.dataUrl.indexOf(',') + 1) : null
+  } finally {
+    if (hideBar && !win.isDestroyed()) win.setContentProtection(false)
+  }
 }
 
 // Choose a different workspace folder without leaving the text bar.
@@ -269,8 +300,9 @@ app.whenReady().then(() => {
 
   createTextBarWindow()
 
-  // The shortcut opens the text bar. The main window opens from the control bar's Open button.
-  globalShortcut.register('CommandOrControl+Shift+Space', () => { void toggleTextBar() })
+  // Ctrl+Alt+Shift opens the text bar. The main window opens from the control bar's Open button.
+  const stopHotkey = watchCtrlAltShift(toggleTextBar)
+  app.on('will-quit', stopHotkey)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
@@ -280,8 +312,6 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
-
-app.on('will-quit', () => globalShortcut.unregisterAll())
 
 ipcMain.handle('settings:get', () => ({ ...DEFAULT_SETTINGS, ...store.store }))
 ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => {
@@ -365,6 +395,7 @@ ipcMain.handle('investigate:start', async (event, payload: { id: string; questio
   const send = (ev: Record<string, unknown>) => {
     event.sender.send(`investigate:event:${payload.id}`, ev)
   }
+  const imageBase64 = payload.imageBase64 ?? (payload.useScreen ? await captureForTextBar() : null)
   investigate({
     apiKey: s.apiKey,
     model: s.model,
@@ -373,7 +404,7 @@ ipcMain.handle('investigate:start', async (event, payload: { id: string; questio
     personality: s.personality,
     verbosity: s.verbosity,
     history: payload.history,
-    imageBase64: payload.imageBase64 ?? (payload.useScreen ? textBarShot : null),
+    imageBase64,
     signal: ac.signal,
     saveNote: (title, body) => addNote(title, body).title,
     onEvent: send

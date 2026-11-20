@@ -40,6 +40,8 @@ export interface Settings {
   shareScreen: boolean
   /** Text bar: where the user last dragged it (left edge and bottom edge, screen pixels). */
   textBarPos?: { x: number; bottom: number } | null
+  /** Text bar: stay on screen when clicking away (Esc closes it; the shortcut returns to it, or closes it when it has focus). */
+  textBarPinned?: boolean
 }
 
 export interface Note {

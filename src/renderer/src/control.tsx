@@ -12,7 +12,7 @@ function Control() {
         </div>
         <div className="flex-1 min-w-0 no-drag">
           <div className="text-xs text-fg font-semibold leading-tight">Coworker</div>
-          <div className="text-2xs text-fg-muted leading-tight">Ctrl+Shift+Space to ask</div>
+          <div className="text-2xs text-fg-muted leading-tight">Ctrl+Alt+Shift to ask</div>
         </div>
         <button className="btn no-drag !h-7" onClick={() => api.showMain()}>Open</button>
         <button className="float-close no-drag" aria-label="Quit Coworker" title="Quit Coworker" onClick={() => api.quit()}>

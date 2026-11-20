@@ -44,8 +44,8 @@ const api = {
     hide: (): Promise<void> => ipcRenderer.invoke('textbar:hide'),
     resize: (height: number): Promise<void> => ipcRenderer.invoke('textbar:resize', height),
     pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke('textbar:pickWorkspace'),
-    onShown: (cb: (info: { hasScreen: boolean }) => void) => {
-      const handler = (_e: unknown, info: { hasScreen: boolean }) => cb(info)
+    onShown: (cb: () => void) => {
+      const handler = () => cb()
       ipcRenderer.on('textbar:shown', handler)
       return () => ipcRenderer.removeListener('textbar:shown', handler)
     },

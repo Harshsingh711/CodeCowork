@@ -517,7 +517,7 @@
   50% { opacity: 1; transform: scale(1.1); }
 }
 
-/* ── Text bar (Ctrl+Shift+Space) ─────────────────────────────────────────
+/* ── Text bar (Ctrl+Alt+Shift) ─────────────────────────────────────────
    A floating prompt over other apps: near-opaque surfaces, because backdrop
    blur cannot reach other windows. Shadows stay inside the window padding. */
 .ask-root { padding: 14px 16px 20px; }
@@ -639,6 +639,10 @@
 }
 .ask-icon-btn:hover { color: rgb(var(--fg)); background: var(--bg-hover); }
 .ask-icon-btn[aria-pressed='true'] { color: var(--accent-strong); }
+/* Pinned: the pin also gets a tinted backing so the state reads at a glance. */
+.ask-pin[aria-pressed='true'] { background: var(--accent-soft); }
+.ask-pin svg { transition: transform var(--dur-base) var(--ease-out); }
+.ask-pin[aria-pressed='true'] svg { transform: rotate(-30deg); }
 /* Dot: a screenshot is attached to questions right now. */
 .ask-icon-btn[data-live]::after {
   content: '';
@@ -713,12 +717,19 @@
   gap: 22px;
 }
 .ask-turn { animation: fadeIn var(--dur-base) var(--ease-out) both; }
+/* Your message: a bubble on the right, as in a chat. */
 .ask-question {
-  margin-bottom: 6px;
+  width: fit-content;
+  max-width: 82%;
+  margin: 0 0 12px auto;
+  padding: 8px 14px;
+  border-radius: 18px 18px 6px 18px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
   font-size: 0.9375rem;
-  font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.45;
   color: rgb(var(--fg));
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .ask-status {

@@ -6,7 +6,9 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        input: { index: resolve(__dirname, 'src/main/index.ts') },
+        // Native module: loaded from node_modules at runtime, it cannot be bundled.
+        external: ['uiohook-napi']
       }
     }
   },

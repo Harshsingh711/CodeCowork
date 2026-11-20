@@ -30,7 +30,7 @@ It is a Windows-first Electron desktop app. It only ever **reads** your code; it
 - **Every answer shows its sources.** Under each answer, chips like `live.ts L13–60` list the files and line ranges it read. Click one to open VS Code at that line, or right-click to copy `path:lines`. Searches and folder listings fold into a quiet count ("2 searches · 1 folder"), and an answer that read nothing is flagged *"No sources read · general knowledge"*.
 - **Live transcript.** Everything you and Coworker say appears in the Transcript tab as it is spoken.
 - **Notes.** Say "write it down" or "save that" and it writes a short titled note to the Notes tab.
-- **Type instead of talk.** `Ctrl+Shift+Space` pops up a text bar over whatever you are doing. Type a question, and the answer appears under the bar with the same source chips. It can include a screenshot of your screen, taken just before the bar appears.
+- **Type instead of talk.** `Ctrl+Alt+Shift` (press all three, then let go) pops up a text bar over whatever you are doing. Type a question, and the answer appears above the bar with the same source chips. It can include a screenshot of your screen, taken when you send the question. Pin the bar to keep it open while you click around.
 - **Out of the way.** A small always-on-top control bar with an **Open** button for the main window and a close button that quits the app.
 - **Your setup, your keys.** You bring your own API keys; they are stored locally on your machine. There is no account and no hosted backend.
 
@@ -157,7 +157,7 @@ src/
   renderer/
     index.html        Main window
     control.html      Floating control bar
-    textbar.html      Text bar (Ctrl+Shift+Space)
+    textbar.html      Text bar (Ctrl+Alt+Shift)
     src/
       App.tsx         Layout, setup gate, voice vs settings view
       textbar.tsx     Text bar: prompt, streamed answers, source chips, pop-in animation

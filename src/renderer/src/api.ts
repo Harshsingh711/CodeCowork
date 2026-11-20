@@ -27,7 +27,7 @@ type API = {
     hide: () => Promise<void>
     resize: (height: number) => Promise<void>
     pickWorkspace: () => Promise<string | null>
-    onShown: (cb: (info: { hasScreen: boolean }) => void) => () => void
+    onShown: (cb: () => void) => () => void
     onHideRequest: (cb: () => void) => () => void
   }
   live: {
